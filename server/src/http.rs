@@ -1,8 +1,12 @@
-use crate::DynKV;
+use std::collections::{BTreeMap, HashMap};
 use std::net::SocketAddr;
 
+use crate::DynKV;
+
 use axum::{
+    body::Body,
     extract::{Extension, Query},
+    http::Request,
     response::{IntoResponse, Response},
     routing::get,
     Router,
@@ -26,14 +30,29 @@ pub async fn http_server(addr: SocketAddr, kv_repo: DynKV) {
 }
 
 async fn kv_get(
-    Query(_params): Query<Option<GetParams>>,
-    Extension(_user_repo): Extension<DynKV>,
+    Query(params): Query<BTreeMap<String, String>>,
+    Extension(user_repo): Extension<DynKV>,
 ) -> Result<String, KVGetError> {
-    todo!()
+    let key = if let Some(key) = params.keys().next() {
+        key
+    } else {
+        return Ok("ada".to_string());
+    };
+
+    match dbg!(user_repo.read().await.get(key).await){
+        Some(val) => Ok(val.to_string()),
+        None => {
+            Ok("NOT FOUND".to_string())
+        },
+    }
 }
 
-async fn kv_set(Extension(_user_repo): Extension<DynKV>) -> Result<String, KVGetError> {
-    todo!()
+async fn kv_set(
+    Query(params): Query<HashMap<String, String>>,
+    Extension(_user_repo): Extension<DynKV>,
+) -> Result<String, KVGetError> {
+    println!("{:?}", params);
+    Ok("hi".to_string())
 }
 
 #[derive(Error, Debug)]
@@ -45,20 +64,20 @@ impl IntoResponse for KVGetError {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Debug)]
 struct GetParams(String);
 
-#[must_use]
-fn _parse_get_query_params(params: &str) -> Option<GetParams> {
-    let split: Vec<&str> = params.split('=').take(2).collect();
-    if split.len() != 2 {
-        return None;
-    }
-    if split[0] != "key" {
-        return None;
-    }
-    Some(GetParams(split[1].to_string()))
-}
+// #[must_use]
+// fn _parse_get_query_params(params: &str) -> Option<GetParams> {
+//     let split: Vec<&str> = params.split('=').take(2).collect();
+//     if split.len() != 2 {
+//         return None;
+//     }
+//     if split[0] != "key" {
+//         return None;
+//     }
+//     todo!()
+// }
 
 #[derive(Debug)]
 struct SetParams {
