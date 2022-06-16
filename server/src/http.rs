@@ -4,14 +4,11 @@ use std::net::SocketAddr;
 use crate::DynKV;
 
 use axum::{
-    body::Body,
     extract::{Extension, Query},
-    http::Request,
     response::{IntoResponse, Response},
     routing::get,
     Router,
 };
-use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 pub async fn http_server(addr: SocketAddr, kv_repo: DynKV) {
@@ -39,20 +36,25 @@ async fn kv_get(
         return Ok("ada".to_string());
     };
 
-    match dbg!(user_repo.read().await.get(key).await){
+    match user_repo.read().await.get(key).await {
         Some(val) => Ok(val.to_string()),
-        None => {
-            Ok("NOT FOUND".to_string())
-        },
+        None => Ok("NOT FOUND".to_string()),
     }
 }
 
 async fn kv_set(
     Query(params): Query<HashMap<String, String>>,
-    Extension(_user_repo): Extension<DynKV>,
+    Extension(user_repo): Extension<DynKV>,
 ) -> Result<String, KVGetError> {
-    println!("{:?}", params);
-    Ok("hi".to_string())
+    let (key, value) = if let Some(key) = params.iter().next() {
+        key
+    } else {
+        return Ok("ada".to_string());
+    };
+    match user_repo.write().await.store(key, value).await {
+        true => Ok("UPDATED".to_string()),
+        false => Ok("STORED".to_string()),
+    }
 }
 
 #[derive(Error, Debug)]
@@ -62,36 +64,4 @@ impl IntoResponse for KVGetError {
     fn into_response(self) -> Response {
         todo!()
     }
-}
-
-#[derive(Debug)]
-struct GetParams(String);
-
-// #[must_use]
-// fn _parse_get_query_params(params: &str) -> Option<GetParams> {
-//     let split: Vec<&str> = params.split('=').take(2).collect();
-//     if split.len() != 2 {
-//         return None;
-//     }
-//     if split[0] != "key" {
-//         return None;
-//     }
-//     todo!()
-// }
-
-#[derive(Debug)]
-struct SetParams {
-    key: String,
-    value: String,
-}
-
-fn parse_set_query_params(params: &str) -> Option<SetParams> {
-    let split: Vec<&str> = params.split('=').take(2).collect();
-    if split.len() != 2 {
-        return None;
-    }
-    Some(SetParams {
-        key: split[0].to_string(),
-        value: split[1].to_string(),
-    })
 }

@@ -25,16 +25,11 @@ pub enum ParseSetCommandError {}
 #[derive(Debug, Error, PartialEq)]
 pub enum ParseGetCommandError {}
 
-pub fn command_parse<'input>(
-    input: &'input str,
-) -> Result<Command, ParseCommandError> {
+pub fn command_parse(input: &str) -> Result<Command, ParseCommandError> {
     let mut parser = command_parser();
     match parser.parse(input) {
         Ok((_tail, cmd)) => Ok(cmd),
-        Err(nom::Err::Error(e)) => {
-            dbg!(&e);
-            Err(ParseCommandError::Nom(input.to_string(), e.code))
-        }
+        Err(nom::Err::Error(e)) => Err(ParseCommandError::Nom(input.to_string(), e.code)),
         _ => unimplemented!(),
     }
 }
@@ -49,7 +44,8 @@ pub fn get_command_parser<'input>(
     let (tail, _get) = tag("get")(inp)?;
     let (tail, _whitespace) = char(' ')(tail)?;
     let (tail, keys) = take_until("\r")(tail)?;
-    let keys: Vec<String> = if let Ok(keys) = keys.split(' ')
+    let keys: Vec<String> = if let Ok(keys) = keys
+        .split(' ')
         .map(|key| {
             if key.chars().any(|c| !c.is_control()) {
                 Ok(key.to_string())
@@ -109,7 +105,7 @@ mod tests {
     fn it_parses_one_key() {
         let ex = "get key\r\n";
         assert_eq!(
-            dbg!(get_command_parser(ex)),
+            get_command_parser(ex),
             Ok(("", Command::Get(vec!["key".to_string()])))
         );
     }

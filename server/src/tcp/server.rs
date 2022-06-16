@@ -1,23 +1,18 @@
 use std::future::Future;
 use std::io;
-use std::net::IpAddr;
 use std::net::SocketAddr;
 use std::pin::Pin;
-use std::sync::Arc;
 
-use super::command_parse;
-use super::parser::ParseCommandError;
+use crate::{command_parse, ParseCommandError};
 use crate::{Command, DynKV};
 
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 use tokio::task::yield_now;
-use tower::filter::Predicate;
 use tower::Service;
 use tower::ServiceBuilder;
 
-const PARSE_ERROR: &[u8] = b"PARSE ERROR\r\n";
 const STORED: &[u8] = b"STORED\r\n";
 const UPDATED: &[u8] = b"UPDATED\r\n";
 const NEWLINE: &[u8] = b"\r\n";
@@ -67,8 +62,8 @@ impl Service<Request> for Server {
     fn call(&mut self, req: Request) -> Self::Future {
         let repo = self.repo.clone();
         let fut = async move {
-            let cmd = command_parse(&req.body).map_err(|err| CommandError::Something(err))?;
-            match dbg!(cmd) {
+            let cmd = command_parse(&req.body)?;
+            match cmd {
                 Command::Get(keys) => {
                     let repo = repo.read().await;
                     let mut results = vec![];
@@ -94,87 +89,59 @@ impl Service<Request> for Server {
     }
 }
 
-struct RateLimitEntry {}
-
-#[derive(Clone, Debug, Default)]
-struct RateLimi {
-    store: Arc<std::collections::BTreeMap<IpAddr, std::time::SystemTime>>,
-}
-
-impl Predicate<Request> for RateLimi {
-    type Request = Request;
-    fn check(&mut self, req: Self::Request) -> Result<Request, tower::BoxError> {
-        // self.store.entry(req.ip).o
-        Ok(req)
-    }
-}
-
 #[derive(Debug)]
 struct Request {
     body: String,
-    ip: IpAddr,
 }
 
-unsafe impl Send for Request {}
-
 const MAX_MESSAGE_SIZE: usize = 1024;
+const TCP_TIMEOUT: u128 = 1000;
 
 pub async fn tcp_server(addr: SocketAddr, repo: DynKV) -> io::Result<()> {
     let listener = TcpListener::bind(addr).await?;
     let server = Server { repo };
-    let service = ServiceBuilder::new()
-        .filter(RateLimi::default())
-        .service(server);
+    let service = ServiceBuilder::new().service(server);
     loop {
         let mut service = service.clone();
         match listener.accept().await {
-            Ok((socket, addr)) => {
+            Ok((socket, _addr)) => {
                 tokio::spawn(async move {
                     let now = std::time::Instant::now();
                     let mut socket = socket;
                     let mut buf = vec![0u8; MAX_MESSAGE_SIZE];
-                    while std::time::Instant::now().duration_since(now).as_millis() < 1000 {
-                        let n = socket.try_read(&mut buf);
-                        let n = match n {
+                    while std::time::Instant::now().duration_since(now).as_millis() < TCP_TIMEOUT {
+                        let read = socket.try_read(&mut buf);
+                        let n = match read {
                             Ok(n) => n,
                             Err(e) => {
                                 yield_now().await;
                                 if e.kind() == io::ErrorKind::WouldBlock {
                                     continue;
                                 }
-                                return Ok(());
+                                return Ok::<_, io::Error>(());
                             }
                         };
-                        let data = if let Ok(data) = std::str::from_utf8(&buf[..n]) {
-                            data
-                        } else {
-                            let _ = socket.write(PARSE_ERROR).await?;
-                            return Ok::<_, io::Error>(());
-                        };
+                        let data = String::from_utf8_lossy(&buf[..n]);
                         match service
                             .call(Request {
                                 body: data.to_string(),
-                                ip: addr.ip(),
                             })
                             .await
                         {
                             Ok(CommandResponse::GetResponse(v)) => {
                                 for value in v {
-                                    match value {
-                                        GetResult::Found { key: _key, value } => {
-                                            socket.write(value.as_bytes()).await?;
-                                            socket.write(NEWLINE).await?;
-                                        }
-                                        _ => {}
+                                    if let GetResult::Found { key: _key, value } = value {
+                                        let _ = socket.write(value.as_bytes()).await?;
+                                        let _ = socket.write(NEWLINE).await?;
                                     }
                                 }
-                                socket.write(END).await?;
+                                let _ = socket.write(END).await?;
                             }
                             Ok(CommandResponse::SetStored) => {
-                                socket.write(STORED).await?;
+                                let _ = socket.write(STORED).await?;
                             }
                             Ok(CommandResponse::SetUpdated) => {
-                                socket.write(UPDATED).await?;
+                                let _ = socket.write(UPDATED).await?;
                             }
                             Err(e) => eprintln!("{e}"),
                         };
@@ -205,7 +172,6 @@ mod test {
         assert!(server
             .call(Request {
                 body: Command::Get(vec!["abcd".to_string()]).to_string_command(),
-                ip: "127.0.0.1".parse().unwrap(),
             })
             .await
             .is_ok());

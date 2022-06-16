@@ -21,7 +21,7 @@ pub struct MemKV {
 #[async_trait]
 impl KV for MemKV {
     async fn store(&mut self, key: &str, val: &str) -> bool {
-        self.m.insert(key.to_string(), val.to_string()).is_none()
+        self.m.insert(key.to_string(), val.to_string()).is_some()
     }
     async fn get(&self, key: &str) -> Option<&String> {
         self.m.get(&key.to_string())
